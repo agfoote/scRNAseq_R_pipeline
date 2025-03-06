@@ -1,0 +1,187 @@
+---
+title: "Single Cell RNA-Seq : 02-Doublet detection"
+author: "Alexander G Foote"
+date: "`r Sys.Date()`"
+output:
+    html_document:
+      keep_md: TRUE
+      toc: TRUE
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning=FALSE, error=FALSE, message=FALSE)
+```
+
+## Load packages
+```{r libraries, include=FALSE}
+library(Seurat)
+library(DoubletFinder)
+library(kableExtra) # format tables
+library(ggplot2)  
+library(biomaRt)
+library(patchwork)
+library(BiocManager)
+library(tidyr) # create graphics
+library(tidyverse)
+library(viridis)   # accessible color palettes
+library(glmGamPoi)  
+set.seed(12345)
+```
+
+Doublets are cells that appear to be, but are not, real cells. There are two major types of doublets: heterotypic and homotypic. *Heterotypic doublets* are formed by cells with distinct transcriptional profiles. *Homotypic doublets* are formed by cells with similar transcriptional profiles. Heterotypic doublets are relatively easier to detect compared with homotypic doublets.
+
+Depending on the protocols used to barcode single cells/nuclei, doublet rates vary significantly and it can reach as high as 40%. Experimental strategies have been developed to reduce the doublet rate, such as [cell hashing](https://genomebiology.biomedcentral.com/articles/10.1186/s13059-018-1603-1), and [MULTI-Seq](https://www.nature.com/articles/s41592-019-0433-8). However, these techniques require extra steps in sample preparation which leads to extra costs and time, and they do not guarantee to remove all doublets.
+
+Naturally, removing doublets _in silico_ is very appealing and there have been many tools/methods developed to achieve this: [DoubletFinder](https://www.cell.com/cell-systems/pdfExtended/S2405-4712(19)30073-0), DoubletDetection(https://github.com/JonathanShor/DoubletDetection), [DoubletDecon](https://www.sciencedirect.com/science/article/pii/S2211124719312860), [demuxlet](https://www.nature.com/articles/nbt.4042), among others.
+
+## Import data for DoubletFinder
+[DoubletFinder](https://github.com/chris-mcginnis-ucsf/DoubletFinder) takes fully pre-processed data from Seurat (NormalizeData, FindVariableGenes, ScaleData, RunPCA, and RunUMAP) as input and the process should be done for each sample individually. The input data should be processed to remove low-quality cell clusters first.
+
+```{r}
+saline1 <- readRDS("/Users/alexanderfoote/dev/Projs/R/scRNA_analysis_7dpi_IAV/rds/saline1.std_pipeline_predoubletremoval_IAVseq.rds")
+saline2 <- readRDS("/Users/alexanderfoote/dev/Projs/R/scRNA_analysis_7dpi_IAV/rds/saline2.std_pipeline_predoubletremoval_IAVseq.rds")
+IAV <- readRDS("/Users/alexanderfoote/dev/Projs/R/scRNA_analysis_7dpi_IAV/rds/IAV.std_pipeline_predoubletremoval_IAVseq.rds")
+```
+
+## Parameter selection
+In addition to the Seurat object, DoubletFinder takes a number of arguments. These are:
+* PCs: a vector of statistically significant PCs to use
+* pN: the number of artificially generated doublets (default = 0.25)
+* pK: PC neighborhood size used to compute network
+* nExp: threshold used to make doublet/singlet call
+
+### pN & pK
+We will use PCs 1-50 (based on the dimensionality reduction section).
+
+The optimal value of pK varies between samples, and is impacted by the number of cell states and magnitude of transcriptional heterogeneity present in the data. The mean-variance normalized bimodality coefficient (BCmvn) is used as a measure of pK optimization. In experiments with known doublet frequencies, BCmvn is maximized by values of pK that produce the most accurate doublet-calling. In the code below, the pN & pK values corresponding to the maxiumum BCmvn are selected for each sample.
+
+```{r include=FALSE}
+# This increases the max allowed size for globals to 1 GB. Adjust the value if needed
+options(future.globals.maxSize = 1000 * 1024^2)  # sets limit to 1000 MB (1GB)
+
+#SALINE1
+## pK Identification
+sweep.res.list.saline1  <- paramSweep(saline1,PCs=1:50,sct=TRUE)
+sweep.stats.saline1 <- summarizeSweep(sweep.res.list.saline1,GT=FALSE)
+bcmvn.saline1 <- find.pK(sweep.stats.saline1)
+sweep.stats.saline1 #use highest BCrea1 value here to chose the pN and pK
+saline1
+nExp_poi <- round(0.02880*nrow(saline1@meta.data)) #0.028 represents ~2800 total cells in condition (i.e. samples)
+
+# Run DoubletFinder with chosen parameters
+saline1 <- doubletFinder(saline1,
+                         PCs=1:50,
+                         pN=0.1,
+                         pK=0.01,
+                         nExp=nExp_poi,
+                         reuse.pANN=FALSE,
+                         sct=TRUE)
+
+# Identify the doublet classification column (its name includes the parameters used)
+df_col <- grep("DF.classifications", colnames(saline1@meta.data), value = TRUE)
+cat("DoubletFinder classification column:", df_col, "\n")
+
+# Subset the Seurat object to keep only cells classified as "Singlet"
+saline1 <- subset(saline1, subset = DF.classifications_0.1_0.01_83 == "Singlet")
+head(saline1@meta.data)
+
+#SALINE2
+sweep.res.list.saline2  <- paramSweep(saline2,PCs=1:50,sct=TRUE)
+sweep.stats.saline2 <- summarizeSweep(sweep.res.list.saline2,GT=FALSE)
+bcmvn.saline2 <- find.pK(sweep.stats.saline2)
+sweep.stats.saline2
+saline2
+nExp_poi <- round(0.05835*nrow(saline2@meta.data)) 
+
+# Run DoubletFinder with chosen parameters
+saline2 <- doubletFinder(saline2,
+                         PCs=1:50,
+                         pN=0.15,
+                         pK=0.005,
+                         nExp=nExp_poi,
+                         reuse.pANN=FALSE,
+                         sct=TRUE) 
+
+# Identify the doublet classification column (its name includes the parameters used)
+df_col <- grep("DF.classifications", colnames(saline2@meta.data), value = TRUE)
+cat("DoubletFinder classification column:", df_col, "\n")
+
+# Subset the Seurat object to keep only cells classified as "Singlet"
+saline2 <- subset(saline2,subset= DF.classifications_0.15_0.005_340 == "Singlet")
+head(saline2@meta.data)
+
+#IAV
+sweep.res.list.IAV  <- paramSweep(IAV,PCs=1:50,sct=TRUE)
+sweep.stats.IAV <- summarizeSweep(sweep.res.list.IAV,GT=FALSE)
+bcmvn.IAV <- find.pK(sweep.stats.IAV)
+sweep.stats.IAV 
+IAV
+nExp_poi <- round(0.06152*nrow(IAV@meta.data)) 
+
+# Run DoubletFinder with chosen parameters
+IAV <- doubletFinder(IAV,
+                     PCs=1:50,
+                     pN=0.15,
+                     pK=0.005,
+                     nExp=nExp_poi,
+                     reuse.pANN=FALSE,
+                     sct=TRUE) 
+
+# Identify the doublet classification column (its name includes the parameters used)
+df_col <- grep("DF.classifications", colnames(IAV@meta.data), value = TRUE)
+cat("DoubletFinder classification column:", df_col, "\n")
+
+# Subset the Seurat object to keep only cells classified as "Singlet"
+IAV <- subset(IAV,subset= DF.classifications_0.15_0.005_378 == "Singlet")
+head(IAV@meta.data) 
+```
+
+## Recluster singlet datasets
+```{r}
+#Saline1
+saline1 <- FindNeighbors(saline1, dims = 1:50)
+saline1 <- FindClusters(saline1, resolution = 0.5) 
+DimPlot(saline1, reduction = "umap", label=TRUE, pt.size = 0.5)
+
+#Saline2
+saline2 <- FindNeighbors(saline2, dims = 1:50)
+saline2 <- FindClusters(saline2, resolution = 0.5) 
+DimPlot(saline2, reduction = "umap", label=TRUE, pt.size = 0.5)
+
+#IAV
+IAV <- FindNeighbors(IAV, dims = 1:50)
+IAV <- FindClusters(IAV, resolution = 0.5) 
+DimPlot(IAV, reduction = "umap", label=TRUE, pt.size = 0.5)
+```
+
+## Check Compartments and Feature Counts
+```{r QC}
+#Compartments
+VlnPlot(saline1,features=c("Epcam","Ptprc","Col1a1","Cldn5"),pt.size=0.0)
+#Feature Counts
+VlnPlot(saline1,features=c("nFeature_RNA","nCount_RNA","percent.mt"),pt.size=0)
+
+#Compartments
+VlnPlot(saline2,features=c("Epcam","Ptprc","Col1a1","Cldn5"),pt.size=0)
+#Feature Counts
+VlnPlot(saline2,features=c("nFeature_RNA","nCount_RNA","percent.mt"),pt.size=0)
+
+#Compartments
+VlnPlot(IAV,features=c("Epcam","Ptprc","Col1a1","Cldn5"),pt.size=0)
+#Feature Counts
+VlnPlot(IAV,features=c("nFeature_RNA","nCount_RNA","percent.mt"),pt.size=0)
+```
+
+### Save object
+```{r saveRDS}
+#setwd('/Users/alexanderfoote/R_Projects/scRNA_analysis_7dpi_postIAV/rds')
+saveRDS(saline1, "saline1.std_pipeline_singlets_unrefined_mt15_IAVseq.rds")
+saveRDS(saline2, "saline2.std_pipeline_singlets_unrefined_mt15_IAVseq.rds")
+saveRDS(IAV, "IAV.std_pipeline_singlets_unrefined_mt15_IAVseq.rds")
+```
+
+### Session information
+```{r sessioinfo}
+sessionInfo()
+```
+

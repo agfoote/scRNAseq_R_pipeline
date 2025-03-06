@@ -1,0 +1,331 @@
+---
+title: "Single Cell RNA-Seq : 04-Integration & Additional Refinement"
+author: "Alexander G Foote"
+date: "`r Sys.Date()`"
+output:
+    html_document:
+      keep_md: TRUE
+      toc: TRUE
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE, error = FALSE)
+```
+
+## Load packages
+
+```{r workspace, include = FALSE}
+library(Seurat)
+library(kableExtra) # format tables
+library(ggplot2)  
+library(biomaRt)
+library(patchwork)
+library(BiocManager)
+library(tidyr) # create graphics
+library(tidyverse)
+library(viridis)   # accessible color palettes
+set.seed(12345)
+```
+
+More and more experiments involve a large number of samples/datasets, that may have been prepared in separate batches. Or in the case where one would like to include or integrate publicly available datasets. It is important to properly integrate these datasets.
+
+Most of the methods that were developed to integrate single cell datasets fall into two categories. The first is the "anchor" based approach. In this approach, the first step is to select a batch as the "anchor" and convert other batches to the "anchor" batch. Among these approaches are [MNN](https://github.com/MarioniLab/MNN2017), [iMAP](https://github.com/Svvord/iMAP), and [SCALEX](https://github.com/jsxlei/SCALEX). The advantage of the anchor-based approach is that different batches of cells can be studied under the same experimental conditions, and the disadvantage is that it is not possible to fully combine the features of each batch because the cell types contained in each batch are unknown.
+
+The second approach is to transform all batches of data to a low-dimensional space to correct batch effects, such as implemented in [Harmony](https://github.com/immunogenomics/harmony), [DESC](https://www.nature.com/articles/s41467-020-15851-3), [BBKNN](https://github.com/Teichlab/bbknn), [STACAS](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC8098019/) and [Seurat's integration](https://www.cell.com/cell/fulltext/S0092-8674(19)30559-8). This second approach has the advantage of extracting biologically relevant latent features and reducing the impact of noise, but it cannot be used for differential gene expression analysis. Many of these existing methods work well when the batches of datasets have the same cell types, however, they fail when there are different cell types involved in different datasets. [Scanorama](https://github.com/brianhie/scanorama) uses similar approach, but it allows integration of datasets that don't always share a common cell type among all and the batch-corrected gene expression data can be used for differential gene expression analysis.
+
+[scVI](https://www.nature.com/articles/s41592-018-0229-2) is based on a hierarchical Baysian model with conditional distributions specified by deep neural networks. The expression of a gene in a cell is modeled using a zero-inflated negative binomial distribution, conditioned on batch annotaton (if available), as well as two unobserved random variables. One is the variation due to differences in capture efficiency and sequencing depth and it serves as a cell-specific scaling factor. The other captures the biological differences. This frame work used by scVI allows for integration of datasets from different experiment, and permits differential expression analysis on estimated expression data.
+
+Recently, [IMGG](https://www.mdpi.com/1422-0067/23/4/2082) has been developed that uses connected graphs and generative adversarial networks (GAN) to achieve the goal of eliminating nonbiological noise between batches of datasets. This new method has been demonstrated to work well both in the situation where datasets have the same cell types and in the situation where datasets may have different cell types.
+
+In this dataset, since we have \~5000 cells per condition, we will use reciprocal PCA, which is superior to its first integration approach using canonical correlation analysis (CCA) and tends to favor smaller samples sizes as compared to other methods (i.e. Harmony). The basic idea is to identify cross-dataset pairs of cells that are in a matched biological state ("anchors"), and use them to correct technical differences between datasets. The integration method we use has been implemented in Seurat [its publication](https://www.sciencedirect.com/science/article/pii/S0092867419305598?via%3Dihub).
+
+## Import normalized/scaled/refined data for integration
+
+```{r}
+saline1 <- readRDS("/Users/alexanderfoote/dev/Projs/R/scRNA_analysis_7dpi_IAV/rds/saline1.std_pipeline_singlets_refined_mt15_IAVseq.rds")
+saline2 <- readRDS("/Users/alexanderfoote/dev/Projs/R/scRNA_analysis_7dpi_IAV/rds/saline2.std_pipeline_singlets_refined_mt15_IAVseq.rds")
+IAV <- readRDS("/Users/alexanderfoote/dev/Projs/R/scRNA_analysis_7dpi_IAV/rds/IAV.std_pipeline_singlets_refined_mt15_IAVseq.rds")
+```
+
+## Check and add metadata
+
+```{r}
+saline1$SampleName <- "Control1"
+saline2$SampleName <- "Control2"
+IAV$SampleName <- "post-IAV"
+saline1$Condition <- "Control"
+saline2$Condition <- "Control"
+IAV$Condition <- "post-IAV"
+
+saline1
+saline1@commands # This will display all manipulations to the object
+saline1@meta.data # This will display all categorical data in our object
+
+saline2
+saline2@commands 
+saline2@meta.data 
+
+IAV
+IAV@commands 
+IAV@meta.data 
+```
+
+## Identify integration anchors with RPCA method
+
+The integration anchors are pairs of cells that are mutual nearest neighbors on the shared low-dimensional representation. These may be calculated either for each Seurat object relative to a reference object, or pairwise between all objects if no reference is provided.
+
+```{r}
+anchors_rpca <- FindIntegrationAnchors(object.list = list(saline1, saline2, IAV), reduction = "rpca")
+experiment.integrated <- IntegrateData(anchorset = anchors_rpca)
+experiment.integrated$SampleName <- factor(experiment.integrated$SampleName, levels=c("Saline1", "Saline2", "IAV"))
+#Normalize to cell numbers
+table (Idents(experiment.integrated),experiment.integrated@meta.data$orig.ident)
+```
+
+The new experiment.integrated object has two assays: RNA and integrated. The RNA assay contains the normalized, scaled data from the individual experiment.split objects merged into a single table, while the data in the integrated assay has been scaled in such a way that it is no longer appropriate to use this assay for differential expression. It is recommended to use the integrated assay for clustering and visualization (UMAP plots) and RNA assay for DE analysis. After integration, the control and IAV cells are more co-localized on the biplot.
+
+```{r}
+DefaultAssay(experiment.integrated) <- "integrated"
+experiment.integrated <- ScaleData(experiment.integrated)
+experiment.integrated <- RunPCA(experiment.integrated)
+DimPlot(experiment.integrated, group.by = "Condition", reduction = "pca", shuffle = TRUE) +
+  scale_color_viridis_d()
+
+experiment.integrated <- FindNeighbors(experiment.integrated, reduction = "pca", dims = 1:50)
+experiment.integrated <- FindClusters(experiment.integrated, resolution = 0.5)
+experiment.integrated <- RunUMAP(experiment.integrated, dims = 1:50)
+#setwd('/Users/alexanderfoote/R_Projects/scRNA_analysis_7dpi_postIAV/plots')
+name <- "epi.immune.mesen_rpca_integrated_IAVseq"
+pdf(paste(name,"_UMAP.pdf",sep=""))
+DimPlot(experiment.integrated, reduction = "umap", label=TRUE, pt.size = 0.5, shuffle = TRUE)
+dev.off()
+DimPlot(experiment.integrated, reduction = "umap", label=TRUE, pt.size = 0.5, shuffle = TRUE)
+pdf(paste(name,"_UMAP_lineage.pdf",sep=""))
+FeaturePlot(experiment.integrated, reduction = "umap", features = c("Epcam","Col1a2","Ptprc","Cldn5"), order=TRUE,pt.size=0.5)
+dev.off()
+
+DimPlot(experiment.integrated,reduction = "umap",label = TRUE,pt.size=0.5,split.by = "Condition") + NoLegend()
+DimPlot(experiment.integrated,reduction = "umap",label = TRUE,pt.size=0.5,group.by = "Condition") 
+FeaturePlot(experiment.integrated, reduction = "umap", features = c("Epcam","Col1a2","Ptprc","Cldn5"), order=TRUE,pt.size=0.5)
+```
+
+## Visualize integrated metadata
+
+```{r}
+VlnPlot(experiment.integrated, features = c("nFeature_RNA","nCount_RNA","percent.mt"),pt.size=0)
+
+lapply(c("nCount_RNA", "nFeature_RNA", "percent.mt"), function(feature){
+  FeaturePlot(experiment.integrated, reduction = "umap", features = feature)
+})
+
+DimPlot(experiment.integrated, reduction = "umap", group.by = "Phase", shuffle = TRUE) +
+  scale_color_viridis_d()
+```
+
+### Clusters using the integrated data
+
+```{r}
+cluster.resolutions <- grep("res", colnames(experiment.integrated@meta.data), value = TRUE)
+sapply(cluster.resolutions, function(res){
+  length(levels(experiment.integrated@meta.data[,res]))
+})
+cluster.resolutions
+lapply(cluster.resolutions, function(res){
+  DimPlot(experiment.integrated,
+          group.by = res,
+          reduction = "umap",
+          shuffle = TRUE)
+})
+lapply(cluster.resolutions, function(res){
+         tmp = experiment.integrated@meta.data[,c(res, "Condition")]
+         colnames(tmp) = c("seurat_clusters", "Condition")
+         ggplot(tmp, aes(x = seurat_clusters, fill = Condition)) +
+           geom_bar() +
+           theme_classic()
+})
+
+VlnPlot(experiment.integrated, features = c("Epcam","Col1a2","Ptprc","Cldn5"),pt.size=0) 
+experiment.integrated <- BuildClusterTree(experiment.integrated, dims = 1:50)
+PlotClusterTree(experiment.integrated)
+```
+
+## FindAllMarkers for experiment.integrated clusters and save object
+
+```{r}
+#setwd('/Users/alexanderfoote/R_Projects/scRNA_analysis_7dpi_postIAV/csv')
+name <- "experiment.integrated_rpca_refine_IAVseq"
+scRNA_refine_combined_rpca.markers <- FindAllMarkers(experiment.integrated, assay = "RNA", only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+x=scRNA_refine_combined_rpca.markers %>% group_by(cluster) %>% top_n(n = 100, wt = avg_log2FC)
+write.table(x, file=paste(name,"_Clustermarker.csv",sep=""), append = FALSE, quote = FALSE)
+#setwd('/Users/alexanderfoote/R_Projects/scRNA_analysis_7dpi_postIAV/rds')
+saveRDS(experiment.integrated, file = "experiment.integrated_rpca_refine_IAVseq_3112024.rds")
+
+VlnPlot(experiment.integrated, features = c("Epcam"),pt.size=0) 
+VlnPlot(experiment.integrated, features = c("Col1a2"),pt.size=0) 
+VlnPlot(experiment.integrated, features = c("Ptprc"),pt.size=0) 
+```
+
+### Clusters that were positive for Epcam (EPITHELIAL)
+
+```{r}
+scRNA_epi <- subset(experiment.integrated, idents = c(0,1,3,4,5,7,8,9,13,17,18,20,23,25,26,29,31,32)) 
+scRNA_epi.list <- SplitObject(scRNA_epi,split.by="Condition")
+scRNA_epi.list <- lapply(X = scRNA_epi.list, 
+                                         FUN = function(x){
+                                           DefaultAssay(x)<- "RNA"
+                                           x <- NormalizeData(x)
+                                           x <- FindVariableFeatures(x,selection.method="vst",nfeatures=3000)
+                                         })
+features <- SelectIntegrationFeatures(object.list = scRNA_epi.list, nfeatures = 3000)
+scRNA_epi.anchors <- FindIntegrationAnchors(object.list=scRNA_epi.list)
+scRNA_epi <- IntegrateData(anchorset=scRNA_epi.anchors)
+scRNA_epi <- ScaleData(scRNA_epi)
+scRNA_epi <- RunPCA(scRNA_epi, verbose = FALSE)
+scRNA_epi <- FindNeighbors(scRNA_epi, reduction = "pca", dims = 1:50)
+scRNA_epi <- FindClusters(scRNA_epi, resolution=0.5)
+scRNA_epi <- RunUMAP(scRNA_epi, reduction = "pca", dims = 1:50)
+#setwd('/Users/alexanderfoote/R_Projects/scRNA_analysis_7dpi_postIAV/plots')
+name <- "epi_rpca_integrated_IAVseq"
+pdf(paste(name,"_UMAP.pdf",sep=""))
+DimPlot(scRNA_epi,reduction = "umap",label = TRUE,pt.size=1) 
+dev.off()
+
+DimPlot(scRNA_epi,reduction = "umap",label = TRUE,pt.size=1) 
+DimPlot(scRNA_epi,reduction = "umap",label = TRUE,pt.size=0.5,group.by = "Condition") 
+DimPlot(scRNA_epi,reduction = "umap",label = TRUE,pt.size=0.5,split.by = "Condition") 
+```
+
+### FindAllMarkers for epi integrated clusters and save object
+
+```{r}
+#setwd('/Users/alexanderfoote/R_Projects/scRNA_analysis_7dpi_postIAV/csv')
+name <- "epi.integrated_rpca_IAVseq"
+scRNA_epi_rpca.markers <- FindAllMarkers(scRNA_epi, assay = "RNA", only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+x=scRNA_epi_rpca.markers %>% group_by(cluster) %>% top_n(n = 100, wt = avg_log2FC)
+write.table(x, file=paste(name,"_Clustermarker.csv",sep=""), append = FALSE, quote = FALSE)
+#setwd('/Users/alexanderfoote/R_Projects/scRNA_analysis_7dpi_postIAV/rds')
+saveRDS(scRNA_epi, file = "scRNA_epi_rpca_IAVseq_3112024.rds")
+```
+
+### Refine and remove low quality cells
+
+```{r}
+DimPlot(scRNA_epi,reduction = "umap",label = TRUE,pt.size=1) 
+VlnPlot(scRNA_epi, features = c("Epcam","Col1a2","Ptprc","Cldn5"),pt.size=0)
+VlnPlot(scRNA_epi, features = c("nFeature_RNA","nCount_RNA","percent.mt"),pt.size=0)
+FeaturePlot(scRNA_epi, reduction = "umap", features = c("Epcam","Col1a2","Ptprc","Cldn5"), order=TRUE,pt.size=0.5)
+FeaturePlot(scRNA_epi, features = c("Epcam","Tg","Foxe1","Folr1"), order=TRUE,pt.size=0.5) 
+
+ggplot(scRNA_epi@meta.data, aes(seurat_clusters))+geom_bar(stat="count")
+sum(scRNA_epi$seurat_clusters == "21")
+```
+
+### Refined epi UMAP
+
+```{r}
+scRNA_epi <- subset(scRNA_epi,idents=c(13,19,15), invert = TRUE)
+scRNA_epi.list <- SplitObject(scRNA_epi,split.by="orig.ident")
+scRNA_epi.list <- lapply(X = scRNA_epi.list, 
+                                         FUN = function(x){
+                                           DefaultAssay(x)<- "RNA"
+                                           x <- NormalizeData(x)
+                                           x <- FindVariableFeatures(x,selection.method="vst",nfeatures=3000)
+                                         })
+features <- SelectIntegrationFeatures(object.list = scRNA_epi.list, nfeatures = 3000)
+scRNA_epi.anchors <- FindIntegrationAnchors(object.list=scRNA_epi.list)
+scRNA_epi <- IntegrateData(anchorset=scRNA_epi.anchors)
+scRNA_epi <- ScaleData(scRNA_epi)
+scRNA_epi <- RunPCA(scRNA_epi, verbose = FALSE)
+scRNA_epi <- FindNeighbors(scRNA_epi, reduction = "pca", dims = 1:50)
+scRNA_epi <- FindClusters(scRNA_epi, resolution=0.8)
+scRNA_epi <- RunUMAP(scRNA_epi, reduction = "pca", dims = 1:50)
+#setwd('/Users/alexanderfoote/R_Projects/scRNA_analysis_7dpi_postIAV/plots')
+name <- "epi_rpca_refined_integrated_IAVseq"
+pdf(paste(name,"_UMAP.pdf",sep=""))
+DimPlot(scRNA_epi,reduction = "umap",label = TRUE,pt.size=1) 
+dev.off()
+pdf(paste(name,"_UMAPplot_overlay.pdf",sep=""))
+DimPlot(scRNA_epi,reduction = "umap",label = TRUE,pt.size=0.5,group.by = "Condition") 
+dev.off()
+pdf(paste(name,"_UMAPplot_cellcycle.pdf",sep=""))
+DimPlot(scRNA_epi, reduction = "umap", group.by = "Phase", shuffle = TRUE) + scale_color_viridis_d()
+dev.off()
+
+DimPlot(scRNA_epi,reduction = "umap",label = TRUE,pt.size=1)
+DimPlot(scRNA_epi,reduction = "umap",label = TRUE,pt.size=0.5,group.by = "Condition") 
+DimPlot(scRNA_epi, reduction = "umap", group.by = "Phase", shuffle = TRUE) +
+  scale_color_viridis_d()
+```
+
+### Clusters that were positive for Ptprc
+
+```{r}
+scRNA_immune <- subset(experiment.integrated, idents = c(10,11,12,13,16,19,21,24,27,28)) 
+scRNA_immune.list <- SplitObject(scRNA_immune,split.by="Condition")
+scRNA_immune.list <- lapply(X = scRNA_immune.list, 
+                             FUN = function(x){
+                               DefaultAssay(x)<- "RNA"
+                               x <- NormalizeData(x)
+                               x <- FindVariableFeatures(x,selection.method="vst",nfeatures=3000)
+                             })
+features <- SelectIntegrationFeatures(object.list = scRNA_immune.list, nfeatures = 3000)
+scRNA_immune.anchors <- FindIntegrationAnchors(object.list=scRNA_immune.list)
+scRNA_immune <- IntegrateData(anchorset=scRNA_immune.anchors)
+scRNA_immune <- ScaleData(scRNA_immune)
+scRNA_immune <- RunPCA(scRNA_immune, verbose = FALSE)
+scRNA_immune <- FindNeighbors(scRNA_immune, reduction = "pca", dims = 1:50)
+scRNA_immune <- FindClusters(scRNA_immune, resolution=1.5)
+scRNA_immune <- RunUMAP(scRNA_immune, reduction = "pca", dims = 1:50)
+#setwd('/Users/alexanderfoote/R_Projects/scRNA_analysis_7dpi_postIAV/plots')
+name <- "immune_rpca_integrated_IAVseq"
+pdf(paste(name,"_UMAP.pdf",sep=""))
+DimPlot(scRNA_immune,reduction = "umap",label = TRUE,pt.size=1) + NoLegend()
+dev.off()
+
+DimPlot(scRNA_immune,reduction = "umap",label = TRUE,pt.size=1) + NoLegend()
+DimPlot(scRNA_immune,reduction = "umap",label = TRUE,pt.size=0.5,group.by = "Condition") 
+```
+
+### Clusters that were positive for Col1a2
+
+```{r}
+scRNA_mesen <- subset(experiment.integrated, idents = c(2,6,14,15,22,30,33,34)) 
+scRNA_mesen.list <- SplitObject(scRNA_mesen,split.by="Condition")
+scRNA_mesen.list <- lapply(X = scRNA_mesen.list, 
+                                         FUN = function(x){
+                                           DefaultAssay(x)<- "RNA"
+                                           x <- NormalizeData(x)
+                                           x <- FindVariableFeatures(x,selection.method="vst",nfeatures=3000)
+                                         })
+features <- SelectIntegrationFeatures(object.list = scRNA_mesen.list, nfeatures = 3000)
+scRNA_mesen.anchors <- FindIntegrationAnchors(object.list=scRNA_mesen.list)
+scRNA_mesen <- IntegrateData(anchorset=scRNA_mesen.anchors)
+scRNA_mesen <- ScaleData(scRNA_mesen)
+scRNA_mesen <- RunPCA(scRNA_mesen, verbose = FALSE)
+scRNA_mesen <- FindNeighbors(scRNA_mesen, reduction = "pca", dims = 1:50)
+scRNA_mesen <- FindClusters(scRNA_mesen, resolution=1.5)
+scRNA_mesen <- RunUMAP(scRNA_mesen, reduction = "pca", dims = 1:50)
+#setwd('/Users/alexanderfoote/R_Projects/scRNA_analysis_7dpi_postIAV/plots')
+name <- "mesen_rpca_integrated_IAVseq"
+pdf(paste(name,"_UMAP.pdf",sep=""))
+DimPlot(scRNA_mesen,reduction = "umap",label = TRUE,pt.size=1) 
+dev.off()
+
+DimPlot(scRNA_mesen,reduction = "umap",label = TRUE,pt.size=1) 
+DimPlot(scRNA_mesen,reduction = "umap",label = TRUE,pt.size=0.5,group.by = "Condition") 
+```
+
+#### Save final inetgrated rds
+
+```{r}
+#setwd('/Users/alexanderfoote/R_Projects/scRNA_analysis_7dpi_postIAV/rds')
+saveRDS(scRNA_epi, file = "scRNA_epi_rpca_IAVseq_2172024.rds")
+saveRDS(scRNA_immune, file = "scRNA_immune_rpca_IAVseq_3112024.rds")
+saveRDS(scRNA_mesen, file = "scRNA_mesen_rpca_IAVseq_2152024.rds")
+```
+
+#### Session information
+
+```{r}
+sessionInfo()
+```

@@ -1,0 +1,129 @@
+---
+title: "Single Cell RNA-Seq : 03-Initial Refinement"
+author: "Alexander G Foote"
+date: "`r Sys.Date()`"
+output:
+    html_document:
+      keep_md: TRUE
+      toc: TRUE
+---
+
+```{r include=FALSE}
+knitr::opts_chunk$set(warning=FALSE, error=FALSE, message=FALSE)
+```
+
+## Load packages
+
+```{r include=FALSE}
+library(Seurat)
+library(DoubletFinder)
+library(kableExtra) # format tables
+library(ggplot2)  
+library(biomaRt)
+library(patchwork)
+library(BiocManager)
+library(tidyr) # create graphics
+library(tidyverse)
+library(viridis)   # accessible color palettes
+library(glmGamPoi)  
+set.seed(12345)
+```
+
+```{r}
+saline1 <- readRDS("/Users/alexanderfoote/dev/Projs/R/scRNA_analysis_7dpi_IAV/rds/saline1.std_pipeline_singlets_unrefined_mt15_IAVseq.rds")
+saline2 <- readRDS("/Users/alexanderfoote/dev/Projs/R/scRNA_analysis_7dpi_IAV/rds/saline2.std_pipeline_singlets_unrefined_mt15_IAVseq.rds")
+IAV <- readRDS("/Users/alexanderfoote/dev/Projs/R/scRNA_analysis_7dpi_IAV/rds/IAV.std_pipeline_singlets_unrefined_mt15_IAVseq.rds")
+```
+
+## Identify clusters for refinement
+
+For our initial dataset refinement, it is essential to filter out thyroid epithelial cells from our single-cell data of the larynx/trachea, as thyroid tissue is anatomically adjacent but not relevant to our analysis. We’ll first use Epcam to broadly identify epithelial cell populations, then specifically remove thyroid cells expressing markers Tg, Tpo, Folr1, and Pax8. This preliminary filtering step ensures our dataset accurately represents only the intended laryngeal and tracheal cell populations before proceeding to integration and further downstream refinement.
+
+```{r}
+#all major compartments
+FeaturePlot(saline1, features = c("Epcam","Col1a2","Ptprc","Cldn5"), order=TRUE,pt.size=0.5) 
+FeaturePlot(saline2, features = c("Epcam","Col1a2","Ptprc","Cldn5"), order=TRUE,pt.size=0.5) 
+FeaturePlot(IAV, features = c("Epcam","Col1a2","Ptprc","Cldn5"), order=TRUE,pt.size=0.5) 
+#Thyroid gland cell types
+FeaturePlot(saline1, features = c("Epcam","Tg","Tpo","Folr1","Pax8"), order=TRUE,pt.size=0.5) 
+VlnPlot(saline1,features=c("Epcam","Tg","Tpo","Folr1","Pax8"),pt.size=0)
+FeaturePlot(saline2, features = c("Epcam","Tg","Foxe1","Tpo","Folr1","Pax8"), order=TRUE,pt.size=0.5) 
+VlnPlot(saline2,features=c("Epcam","Tg","Tpo","Folr1","Pax8"),pt.size=0)
+FeaturePlot(IAV, features = c("Epcam","Tg","Tpo","Folr1","Pax8"), order=TRUE,pt.size=0.5) 
+VlnPlot(IAV,features=c("Epcam","Tg","Tpo","Folr1","Pax8"),pt.size=0)
+```
+
+## FindAllMarkers to confirm gene expression
+
+```{r}
+#setwd('/Users/alexanderfoote/R_Projects/scRNA_analysis_7dpi_postIAV/csv')
+#Finding DE features (CLUSTER BIOMARKERS)
+name <- "saline1-singlet_unrefined_allcompartments_IAVseq"
+scRNA_saline1.markers <- FindAllMarkers(saline1, assay = "RNA", only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+x=scRNA_saline1.markers %>% group_by(cluster) %>% top_n(n = 100, wt = avg_log2FC)
+write.table(x, file=paste(name,"_Clustermarker.csv",sep=""), append = FALSE, quote = FALSE) 
+name <- "saline2-singlet_unrefined_allcompartments_IAVseq"
+scRNA_saline2.markers <- FindAllMarkers(saline2, assay = "RNA", only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+x=scRNA_saline2.markers %>% group_by(cluster) %>% top_n(n = 100, wt = avg_log2FC)
+write.table(x, file=paste(name,"_Clustermarker.csv",sep=""), append = FALSE, quote = FALSE) 
+name <- "IAV-singlet_unrefined_allcompartments_IAVseq"
+scRNA_IAV.markers <- FindAllMarkers(IAV, assay = "RNA", only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+x=scRNA_IAV.markers %>% group_by(cluster) %>% top_n(n = 100, wt = avg_log2FC)
+write.table(x, file=paste(name,"_Clustermarker.csv",sep=""), append = FALSE, quote = FALSE)
+```
+
+## Initial Refinement
+
+Considering gene markers and feature plot, REFINE clusters to remove thyroid gland epithelial clusters
+
+```{r}
+saline1 <- subset(saline1,idents=c(0,1), invert = TRUE)
+saline1 <- RunPCA(saline1, npcs = 100)
+saline1 <- FindNeighbors(saline1, reduction = "pca", dims = 1:50)
+saline1 <- FindClusters(saline1, resolution = 0.5) 
+DimPlot(saline1, reduction = "umap", label=TRUE, pt.size = 0.5)
+
+saline2 <- subset(saline2,idents=c(11), invert = TRUE)
+saline2 <- RunPCA(saline2, npcs = 100)
+saline2 <- FindNeighbors(saline2, reduction = "pca", dims = 1:50)
+saline2 <- FindClusters(saline2, resolution = 0.5) 
+DimPlot(saline2, reduction = "umap", label=TRUE, pt.size = 0.5)
+
+IAV <- subset(IAV,idents=c(8), invert = TRUE)
+IAV <- RunPCA(IAV, npcs = 100)
+IAV <- FindNeighbors(IAV, reduction = "pca", dims = 1:50)
+IAV <- FindClusters(IAV, resolution = 0.5) 
+DimPlot(IAV, reduction = "umap", label=TRUE, pt.size = 0.5)
+```
+
+## Re-check Compartments and Feature Counts
+
+```{r}
+#all major compartments
+VlnPlot(saline1,features=c("Epcam","Ptprc","Col1a1","Cldn5"),pt.size=0.0)
+VlnPlot(saline1,features=c("nFeature_RNA","nCount_RNA","percent.mt"),pt.size=0)
+VlnPlot(saline2,features=c("Epcam","Ptprc","Col1a1","Cldn5"),pt.size=0)
+VlnPlot(saline2,features=c("nFeature_RNA","nCount_RNA","percent.mt"),pt.size=0)
+VlnPlot(IAV,features=c("Epcam","Ptprc","Col1a1","Cldn5"),pt.size=0)
+VlnPlot(IAV,features=c("nFeature_RNA","nCount_RNA","percent.mt"),pt.size=0)
+
+#Thyroid gland cell types
+VlnPlot(saline1,features=c("Epcam","Tg","Tpo","Folr1","Pax8"),pt.size=0)
+VlnPlot(saline2,features=c("Epcam","Tg","Tpo","Folr1","Pax8"),pt.size=0)
+VlnPlot(IAV,features=c("Epcam","Tg","Tpo","Folr1","Pax8"),pt.size=0)
+```
+
+### Save object
+
+```{r}
+#setwd('/Users/alexanderfoote/R_Projects/scRNA_analysis_7dpi_postIAV/rds')
+saveRDS(saline1, "saline1.std_pipeline_singlets_refined_mt15_IAVseq.rds")
+saveRDS(saline2, "saline2.std_pipeline_singlets_refined_mt15_IAVseq.rds")
+saveRDS(IAV, "IAV.std_pipeline_singlets_refined_mt15_IAVseq.rds")
+```
+
+### Session information
+
+```{r}
+sessionInfo()
+```
