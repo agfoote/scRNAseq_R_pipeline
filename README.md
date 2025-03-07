@@ -2,8 +2,8 @@
 
 This repository provides a comprehensive pipeline for processing and analyzing single-cell RNA-sequencing data using R. The workflow leverages several R packages—including Seurat, tidyverse, and DoubletFinder—to facilitate quality control, normalization, doublet detection, downstream analysis, and visualization. The pipeline is designed to be modular, allowing users to save intermediate results (e.g., normalized data objects) and resume analysis without re-running the entire workflow.
 
-## 🚀 Pipeline Overview
-Section 1: QC Standard Data Preparation 📊
+## 🚀 Pipeline Overview 🚀 
+## Section 1: QC Standard Data Preparation 📊
 * Load required packages and create the initial Seurat object
 * Assess mitochondrial gene expression
 * Visualize distribution of metadata values
@@ -13,7 +13,7 @@ Section 1: QC Standard Data Preparation 📊
 * Assign cell cycle scores
 * Identify variable genes
 
-##Section 2: Doublet Detection 🔬
+## Section 2: Doublet Detection 🔬
 * Load required packages
 * Import processed data for DoubletFinder analysis
 * Select optimal parameters (pN and pK)
