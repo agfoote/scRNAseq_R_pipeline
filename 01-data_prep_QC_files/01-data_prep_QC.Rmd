@@ -1,5 +1,5 @@
 ---
-title: "Single Cell RNA-Seq : 01-QC Standard Prep"
+title: "Single Cell RNA-Seq : IAV_7dpi : QC Standard Prep"
 author: "Alexander G Foote"
 date: "`r Sys.Date()`"
 output:
@@ -7,6 +7,8 @@ output:
       keep_md: TRUE
       toc: TRUE
 ---
+
+# Single Cell RNA-Seq Part 1: QC Standard Prep
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(message = FALSE, warning = FALSE, error = FALSE)
@@ -25,7 +27,7 @@ library(hdf5r)
 set.seed(12345)
 ```
 
-## Create object
+### Create object
 
 The `CreateSeuratObject` function allows feature (gene) and cell filtering by minimum cell and feature counts. We will set these to 0 for now in order to explore manual filtering more fully in part 2.
 
@@ -50,7 +52,7 @@ class(IAV[["RNA"]])
 head(IAV@meta.data)
 ```
 
-## Mitochondrial gene expression
+### Mitochondrial gene expression
 
 Filtering on the expression of genes from the mitochondrial genome is not appropriate in all cell types. However, in many tissues, low-quality / dying cells may exhibit extensive mitochondrial contamination. Even when not filtering on mitochondrial expression, the data can be interesting or informative. The `PercentageFeatureSet` function calculates the proportion of counts originating from a set of features. Genes in the human mitochondrial genome begin with 'MT', while those in the mouse mitochondrial genome begin with 'mt'.
 
@@ -63,7 +65,7 @@ IAV[["percent.mt"]] <- PercentageFeatureSet(IAV, pattern = "^mt-")
 head(IAV@meta.data) 
 ```
 
-## Visualize distribution of metadata values
+### Visualize distribution of metadata values
 
 The `VlnPlot` function produces a composite plot with one panel for each element of the "features" vector. The data are grouped by the provided identity; by default, this is the active identity of the object, which can be accessed using the `Idents()` function, or in the "active.ident" slot.
 
@@ -73,7 +75,7 @@ VlnPlot(saline2, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol 
 VlnPlot(IAV, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
 ```
 
-## Scatter plots
+### Scatter plots
 
 Scatter plots allow us to visualize the relationships between the metadata variables.
 
@@ -110,7 +112,7 @@ FeatureScatter(IAV, feature1 = "nFeature_RNA", feature2 = "nCount_RNA", pt.size 
   geom_hline(yintercept = 40000) 
 ```
 
-## Cell filtering
+#### Cell filtering
 
 The goal of cell filtering is to remove cells with anomolous expression profiles, typically low UMI cells, which may correspond to low-quality cells or background barcodes that made it through the Cell Ranger filtration algorithm. It may also be appropriate to remove outlier cells with extremely high UMI counts. In this case, the proposed cut-offs on the high end of the distributions are quite conservative, in part to reduce the size of the object and speed up analysis during the workshop. These filters can be put in place with the `subset` function.
 
@@ -123,11 +125,11 @@ table(saline2$orig.ident)
 IAV
 table(IAV$orig.ident)
 #Filtering objects
-saline1.filter <- subset(saline1, subset = nFeature_RNA >= 200 & nFeature_RNA <= 7500 & nCount_RNA >= 200 & nFeature_RNA <= 60000 & percent.mt < 15)
+saline1.filter <- subset(saline1, subset = nFeature_RNA >= 200 & nFeature_RNA <= 7500 & nCount_RNA >= 200 & nCount_RNA <= 60000 & percent.mt < 15)
 saline1 <- saline1.filter
-saline2.filter <- subset(saline2, subset = nFeature_RNA >= 200 & nFeature_RNA <= 7500 & nCount_RNA >= 200 & nFeature_RNA <= 60000 & percent.mt < 15)
+saline2.filter <- subset(saline2, subset = nFeature_RNA >= 200 & nFeature_RNA <= 7500 & nCount_RNA >= 200 & nCount_RNA <= 60000 & percent.mt < 15)
 saline2 <- saline2.filter
-IAV.filter <- subset(IAV, subset = nFeature_RNA >= 200 & nFeature_RNA <= 7500 & nCount_RNA >= 200 & nFeature_RNA <= 60000 & percent.mt < 15)
+IAV.filter <- subset(IAV, subset = nFeature_RNA >= 200 & nFeature_RNA <= 7500 & nCount_RNA >= 200 & nCount_RNA <= 60000 & percent.mt < 15)
 IAV <- IAV.filter
 # Post-check
 saline1
@@ -138,7 +140,7 @@ IAV
 table(IAV$orig.ident)
 ```
 
-## Feature filtering
+#### Feature filtering
 
 When creating the base Seurat object, we had the opportunity filter out some genes using the "min.cells" argument. At the time, we set that to 0. Since we didn't filter our features then, we can apply a filter at this point. If we had filtered when the object was created, this would be an opportunity to be more aggressive. The custom code below provides a function that filters genes requiring a min.umi in at least min.cells, or takes a user-provided list of genes.
 
@@ -169,7 +171,7 @@ IAV
 IAV <- IAV.filter
 ```
 
-## Normalize data
+##### Normalize data
 
 After filtering, the next step is to normalize the data. We employ a global-scaling normalization method, LogNormalize, that normalizes the gene expression measurements for each cell by the total expression, multiplies this by a scale factor (10,000 by default), and then log-transforms the data.
 
@@ -179,7 +181,7 @@ saline2 <- NormalizeData(object = saline2, normalization.method = "LogNormalize"
 IAV <- NormalizeData(object = IAV, normalization.method = "LogNormalize", scale.factor = 10000)
 ```
 
-## Cell cycle assignment
+##### Cell cycle assignment
 
 Cell cycle phase can be a significant source of variation in single cell and single nucleus experiments. There are a number of automated cell cycle stage detection methods available for single cell data. For this workshop, we will be using the built-in Seurat cell cycle function, `CellCycleScoring`. This tool compares gene expression in each cell to a list of cell cycle marker genes and scores each barcode based on marker expression. The phase with the highest score is selected for each barcode. Seurat includes a list of cell cycle genes in human single cell data.
 
@@ -266,7 +268,7 @@ Idents(IAV) <- "orig.ident"
 table(Idents(IAV))
 ```
 
-## Identify variable genes
+###### Identify variable genes
 
 The function FindVariableFeatures identifies the most highly variable genes (default 2000 genes) by fitting a line to the relationship of log(variance) and log(mean) using loess smoothing, uses this information to standardize the data, then calculates the variance of the standardized data. This helps avoid selecting genes that only appear variable due to their expression level.
 
@@ -302,7 +304,7 @@ var.feat.plot <- LabelPoints(plot = var.feat.plot, points = top10, repel = TRUE)
 var.feat.plot
 ```
 
-## Scale the data **This step is computationally intensive and can be quite slow.**
+####### Scale the data **This step is computationally intensive and can be quite slow.**
 
 The `ScaleData` function scales and centers genes in the dataset. If variables are provided with the "vars.to.regress" argument, they are individually regressed against each gene, and the resulting residuals are then scaled and centered unless otherwise specified. We regress out cell cycle results S.Score and G2M.Score, mitochondrial RNA level (percent_MT), and the number of features (nFeature_RNA) as a proxy for sequencing depth.
 
@@ -312,7 +314,7 @@ saline2 <- ScaleData(saline2, vars.to.regress = c("S.Score", "G2M.Score", "perce
 IAV <- ScaleData(IAV, vars.to.regress = c("S.Score", "G2M.Score", "percent.mt", "nFeature_RNA"))
 ```
 
-## Perform dimensionality reduction
+######## Perform dimensionality reduction
 
 ```{r pca}
 saline1 <- RunPCA(saline1, npcs = 100)
@@ -322,7 +324,7 @@ IAV <- RunPCA(IAV, npcs = 100)
 
 While it is theoretically possible to calculate as many PCs as there are features in the data, typically 100 PCs is more than sufficient. In fact, many of these PCs may explain negligible amounts of variation. Seurat provides a number of ways to visualize the PCA results.
 
-## Principal components plot
+### Principal components plot
 
 The PCA biplot is a scatter plot showing the placement of each cell on two selected components. By default, the first and second PC are used, but any two calculated PCs may be specified. At this point in the analysis, since we are no longer performing QA and filtering, we can move to examining relationships between cells on a per-group rather than per-sample basis.
 
@@ -343,7 +345,7 @@ DimPlot(IAV,
 
 The axes are unit-less; points (cells or nuclei) that are farther apart are more dissimilar on the displayed PC than points that are closer together.
 
-## PCA loadings
+### PCA loadings
 
 Each PC can be imagined as a sort of meta-gene for which every cell has an expression value. The top genes associated with the reduction component (i.e. contributing to a cell's "expression level" of that meta-gene) can be plotted for a selected dimension(s) using the `VizDimLoadings` function.
 
@@ -370,7 +372,7 @@ VizDimLoadings(IAV,
   theme_minimal(base_size = 8)
 ```
 
-## Heat map
+######## Heat map
 
 Heat maps display similar information. On the x-axis, cells are ordered by their embeddings ("expression" of the PC), while on the y-axis, genes are ordered by PC loading. When fewer than the total number of cells is selected, this results in selection of the cells with the largest absolute value embeddings, which emphasizes variation on the PC.
 
@@ -398,11 +400,11 @@ DimHeatmap(IAV,
            slot = "scale.data")
 ```
 
-## Selecting PCs to use
+########## Selecting PCs to use
 
 To overcome the extensive technical noise in any single gene, Seurat clusters cells based on their PCA scores, with each PC essentially representing a meta-gene that combines information across a correlated gene set. Determining how many PCs to include downstream is therefore an important step.
 
-## Elbow plot
+########## Elbow plot
 
 An elbow plot displays the standard deviations (or approximate singular values if running PCAFast) of the principle components for easy identification of an elbow in the graph. This elbow often corresponds well with the significant PCs and is much faster to run. This is the traditional approach to selecting principal components.
 
@@ -416,7 +418,7 @@ ElbowPlot(IAV, ndims = 100)
 
 PCs with a strong enrichment of low p-value genes are identified as significant components. Let's use the first 50 PCs. 50 PCs is quite standard for most all datasets and is widely used as a chosen PC score.
 
-## UMAP
+########### UMAP
 
 [Uniform Manifold Approximation and Projection](https://arxiv.org/pdf/1802.03426v3.pdf) (UMAP) is a dimensionality reduction method that is commonly used in single cell RNA-Seq analysis. Single cell data is extremely high-dimensional; UMAP calculates a nearest neighbor network describing the relationships between cells as measured by the PC loadings of variable genes and creates a low-dimensional space that preserves these relationships.
 
@@ -458,17 +460,16 @@ DimPlot(IAV, group.by = "Phase", reduction = "umap", shuffle = TRUE) +
 FeaturePlot(IAV, features = "G2M.Score", reduction = "umap")
 ```
 
-### Save objects
+############ Save objects
 
 ```{r saveRDS}
-#setwd('/Users/alexanderfoote/R_Projects/scRNA_analysis_7dpi_postIAV/rds')
+setwd('/Users/alexanderfoote/R_Projects/scRNA_analysis_7dpi_postIAV/rds')
 saveRDS(saline1, "saline1.std_pipeline_predoubletremoval_IAVseq.rds")
 saveRDS(saline2, "saline2.std_pipeline_predoubletremoval_IAVseq.rds")
 saveRDS(IAV, "IAV.std_pipeline_predoubletremoval_IAVseq.rds")
 ```
 
-### Session information
-
+#### Session information
 ```{r sessioinfo}
 sessionInfo()
 ```
