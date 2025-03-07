@@ -1,6 +1,10 @@
 # Single-Cell RNA-Seq Standard Pipeline in R 🧬
 
-This repository provides a comprehensive pipeline for processing and analyzing single-cell RNA-sequencing data using R. The workflow leverages several R packages—including Seurat, tidyverse, and DoubletFinder—to facilitate quality control, normalization, doublet detection, downstream analysis, and visualization. The pipeline is designed to be modular, allowing users to save intermediate results (e.g., normalized data objects) and resume analysis without re-running the entire workflow.
+This repository provides a comprehensive pipeline for processing and analyzing single-cell RNA-sequencing data using R. 
+
+The workflow leverages several R packages—including Seurat, tidyverse, and DoubletFinder (among others)—to facilitate quality control, normalization, doublet detection, downstream analysis, and initial visualization. 
+Each folder contains a Markdown (.Rmd) file, including corresponding code, visualizations (plots), and detailed outputs, providing a clear record of the analysis workflow and results.
+The pipeline is designed to be modular, allowing users to save intermediate results (e.g., normalized data objects) and resume analysis without re-running the entire workflow.
 
 ## _Pipeline Overview 🚀_ 
 ## Section 1: QC Standard Data Preparation 📊
